@@ -1,3 +1,7 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <sys/time.h>
 #include "ppos.h"
 #include "ppos-core-globals.h"
 
@@ -6,13 +10,105 @@
 // Coloque aqui as suas modificações, p.ex. includes, defines variáveis, 
 // estruturas e funções
 
+#define MAX_QUANTUM 20
+
+#define UPPER_BOUND 20
+#define LOWER_BOUND -20
+
+// estrutura que define um tratador de sinal (deve ser global ou static)
+struct sigaction action ;
+
+// estrutura de inicialização to timer
+struct itimerval timer ;
+
+task_t * scheduler() {
+    task_t *tempTask = readyQueue;
+    task_t *nextTask = readyQueue;
+
+    // enquanto a lista não chega no fim e nem aponta para o 
+    // proximo elemento (lista circular)
+    while(tempTask->next != readyQueue) {
+        tempTask = tempTask->next;
+
+        if (nextTask->prio > tempTask->prio) {
+            nextTask->prio--;
+            nextTask = tempTask;
+        } else if (tempTask->prio > LOWER_BOUND) {
+            tempTask->prio--;
+        }
+    }
+
+    nextTask->prio = nextTask->staticPrio;
+    return nextTask;
+}
+
+// tratador do sinal
+void tratador (int signum)
+{
+  systemTime++;
+
+  if (taskExec != taskMain && taskExec != taskDisp) {
+    taskExec->ticks--;
+    if (taskExec->ticks <= 0) {
+      task_yield();
+    }
+  }
+}
+
+void timer_handler () {
+  // registra a ação para o sinal de timer SIGALRM
+  action.sa_handler = tratador ;
+  sigemptyset (&action.sa_mask) ;
+  action.sa_flags = 0 ;
+  if (sigaction (SIGALRM, &action, 0) < 0)
+  {
+    perror ("Erro em sigaction: ") ;
+    exit (1) ;
+  }
+
+  // ajusta valores do temporizador
+  timer.it_value.tv_usec = 1000 ;      // primeiro disparo, em micro-segundos
+  timer.it_value.tv_sec  = 0 ;         // primeiro disparo, em segundos
+  timer.it_interval.tv_usec = 1000 ;   // disparos subsequentes, em micro-segundos
+  timer.it_interval.tv_sec  = 0 ;      // disparos subsequentes, em segundos
+
+  // arma o temporizador ITIMER_REAL (vide man setitimer)
+  if (setitimer (ITIMER_REAL, &timer, 0) < 0)
+  {
+    perror ("Erro em setitimer: ") ;
+    exit (1) ;
+  }
+}
+
+void task_setprio (task_t *task, int prio) {
+    int prioridade = prio;
+    // ajusta prioridade para range permitido
+    if (prio < LOWER_BOUND) {
+        prioridade = LOWER_BOUND;
+    } else if (prio > UPPER_BOUND) {
+        prioridade = UPPER_BOUND;
+    }
+
+    if (task == NULL) {
+        taskExec->staticPrio = prioridade;
+    }
+    task->staticPrio = prioridade;
+    task->prio = prioridade;
+}
+
+int task_getprio (task_t *task) {
+    if (task == NULL) {
+        return taskExec->staticPrio;
+    }
+    return task->staticPrio;
+}
 
 // ****************************************************************************
 
 
 
 void before_ppos_init () {
-    // put your customization here
+    timer_handler();
 #ifdef DEBUG
     printf("\ninit - BEFORE");
 #endif
@@ -33,7 +129,9 @@ void before_task_create (task_t *task ) {
 }
 
 void after_task_create (task_t *task ) {
-    // put your customization here
+    task->ticks = MAX_QUANTUM;
+    task->createdAt = systemTime;
+    task->activations = 0;
 #ifdef DEBUG
     printf("\ntask_create - AFTER - [%d]", task->id);
 #endif
@@ -47,14 +145,19 @@ void before_task_exit () {
 }
 
 void after_task_exit () {
-    // put your customization here
+    taskExec->execTime = systemTime - taskExec->createdAt;
+    printf("Task %d exit: execution time %d ms, processor time %d ms, %d activations\n",
+    taskExec->id, taskExec->execTime, taskExec->processorTime, taskExec->activations);
 #ifdef DEBUG
     printf("\ntask_exit - AFTER- [%d]", taskExec->id);
 #endif
 }
 
 void before_task_switch ( task_t *task ) {
-    // put your customization here
+    taskExec->processorTime += systemTime - task->currentProcessorTime;
+
+    task->currentProcessorTime = systemTime;
+    task->activations++;
 #ifdef DEBUG
     printf("\ntask_switch - BEFORE - [%d -> %d]", taskExec->id, task->id);
 #endif
@@ -103,7 +206,8 @@ void before_task_resume(task_t *task) {
 }
 
 void after_task_resume(task_t *task) {
-    // put your customization here
+    task->currentProcessorTime = systemTime;
+    task->activations++;
 #ifdef DEBUG
     printf("\ntask_resume - AFTER - [%d]", task->id);
 #endif
@@ -395,13 +499,3 @@ int after_mqueue_msgs (mqueue_t *queue) {
 #endif
     return 0;
 }
-
-task_t * scheduler() {
-    // FCFS scheduler
-    if ( readyQueue != NULL ) {
-        return readyQueue;
-    }
-    return NULL;
-}
-
-
