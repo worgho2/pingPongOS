@@ -34,6 +34,7 @@ struct itimerval timer;
 // Helpers
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define IS_TIME_PREEMPTION_ACTIVE 1
 
 
 task_t * scheduler () {
@@ -110,33 +111,35 @@ void timer_interrupt_handler(int signum) {
 void before_ppos_init () {
     // Registro do timer que gera interrupção a cada TIMER_MS_TICK 
 
-    // Registra a handler para o sinal de timer SIGALRM
-    action.sa_handler = timer_interrupt_handler;
-    sigemptyset(&action.sa_mask);
-    action.sa_flags = 0;
+    if (IS_TIME_PREEMPTION_ACTIVE) {
+        // Registra a handler para o sinal de timer SIGALRM
+        action.sa_handler = timer_interrupt_handler;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
 
-    if (sigaction(SIGALRM, &action, 0) < 0) {
-        perror("Erro em sigaction: ");
-        exit (1);
-    }
+        if (sigaction(SIGALRM, &action, 0) < 0) {
+            perror("Erro em sigaction: ");
+            exit (1);
+        }
 
-    // Primeiro disparo do timer, em micro-segundos
-    timer.it_value.tv_usec = TIMER_MS_TICK;
+        // Primeiro disparo do timer, em micro-segundos
+        timer.it_value.tv_usec = TIMER_MS_TICK;
 
-    // Primeiro disparo do timer, em segundos
-    timer.it_value.tv_sec  = 0;
+        // Primeiro disparo do timer, em segundos
+        timer.it_value.tv_sec  = 0;
 
-    // Disparos subsequentes do timer, em micro-segundos
-    timer.it_interval.tv_usec = TIMER_MS_TICK;
+        // Disparos subsequentes do timer, em micro-segundos
+        timer.it_interval.tv_usec = TIMER_MS_TICK;
 
-    // disparos subsequentes do timer, em segundos
-    timer.it_interval.tv_sec  = 0;
+        // disparos subsequentes do timer, em segundos
+        timer.it_interval.tv_sec  = 0;
 
 
-    // Arma o temporizador ITIMER_REAL
-    if (setitimer(ITIMER_REAL, &timer, 0) < 0) {
-        perror ("Erro em setitimer: ");
-        exit (1);
+        // Arma o temporizador ITIMER_REAL
+        if (setitimer(ITIMER_REAL, &timer, 0) < 0) {
+            perror ("Erro em setitimer: ");
+            exit (1);
+        }
     }
 
 #ifdef DEBUG
