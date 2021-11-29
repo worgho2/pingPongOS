@@ -26,7 +26,9 @@ typedef struct task_t
 
    // ... (outros campos deve ser adicionados APOS esse comentario)
 
-   int prio; // prioridade dinâmica
+   //Variavel que armazena a prioridade dinamica da task
+   int prio;
+   
    int staticPrio; // prioridade estática
 
    int ticks; //ticks da tarefa para validar preempção
