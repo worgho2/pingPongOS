@@ -26,17 +26,18 @@ typedef struct task_t
 
    // ... (outros campos deve ser adicionados APOS esse comentario)
 
-   //Variavel que armazena a prioridade dinamica da task
-   int prio;
+   // Quanta atual disponível até ser preemptada
+   int ramining_quanta;
    
-   int staticPrio; // prioridade estática
+   // Variáveis de prioridade
+   int dynamic_priority;
+   int static_priority;
 
-   int ticks; //ticks da tarefa para validar preempção
-
-   unsigned int createdAt;
-   unsigned int execTime;
-   unsigned int processorTime;
-   unsigned int currentProcessorTime;
+   // Variáveis para contabilização de métricas
+   unsigned int created_at;
+   unsigned int execution_time;
+   unsigned int processor_time;
+   unsigned int last_processor_entry_time;
    unsigned int activations;
    
 } task_t ;

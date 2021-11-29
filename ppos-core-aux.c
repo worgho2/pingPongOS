@@ -1,7 +1,3 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <signal.h>
-#include <sys/time.h>
 #include "ppos.h"
 #include "ppos-core-globals.h"
 
@@ -10,97 +6,101 @@
 // Coloque aqui as suas modificações, p.ex. includes, defines variáveis, 
 // estruturas e funções
 
-#define MAX_QUANTUM 20
+// Includes necessários para utilizar o times
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <sys/time.h>
 
-#define UPPER_BOUND 20
-#define LOWER_BOUND -20
+// Estrutura que define um tratador de sinal
+struct sigaction action;
 
-// estrutura que define um tratador de sinal (deve ser global ou static)
-struct sigaction action ;
+// Estrutura de inicialização to timer
+struct itimerval timer;
 
-// estrutura de inicialização to timer
-struct itimerval timer ;
+// Tempo entre interrupções do timer
+#define TIMER_MS_TICK 1000
 
-task_t * scheduler() {
-    task_t *tempTask = readyQueue;
-    task_t *nextTask = readyQueue;
+// Definição do fator de envelhecimento da tarefa
+#define AGEING_ALPHA 1
 
-    // enquanto a lista não chega no fim e nem aponta para o 
-    // proximo elemento (lista circular)
-    while(tempTask->next != readyQueue) {
-        tempTask = tempTask->next;
+// Definição do tempo que a task pode permanecer no processador
+#define QUANTUM_VALUE  20
 
-        if (nextTask->prio > tempTask->prio) {
-            nextTask->prio--;
-            nextTask = tempTask;
-        } else if (tempTask->prio > LOWER_BOUND) {
-            tempTask->prio--;
+// Definição da escala de prioridades
+#define MAX_PRIORITY 20
+#define MIN_PRIORITY -20
+
+// Helpers
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
+
+task_t * scheduler () {
+    // Implementação do algoritmo de envelhecimento com AGEING_ALPHA 
+
+    task_t* runner = (task_t*)readyQueue->next;
+    task_t* priority_task = (task_t*)readyQueue;
+
+    while (runner != (task_t*)readyQueue) {
+        if (runner->dynamic_priority < priority_task->dynamic_priority) {
+            priority_task->dynamic_priority = MAX(MIN_PRIORITY, MIN(priority_task->dynamic_priority - AGEING_ALPHA, MAX_PRIORITY));
+            priority_task = runner;
+        } else {
+            runner->dynamic_priority = MAX(MIN_PRIORITY, MIN(runner->dynamic_priority - AGEING_ALPHA, MAX_PRIORITY));
         }
+        runner = runner->next;
     }
 
-    nextTask->prio = nextTask->staticPrio;
-    return nextTask;
-}
+    // Correção das prioridades da tarefa
+    task_setprio(priority_task, priority_task->static_priority);
 
-// tratador do sinal
-void tratador (int signum)
-{
-  systemTime++;
-
-  if (taskExec != taskMain && taskExec != taskDisp) {
-    taskExec->ticks--;
-    if (taskExec->ticks <= 0) {
-      task_yield();
-    }
-  }
-}
-
-void timer_handler () {
-  // registra a ação para o sinal de timer SIGALRM
-  action.sa_handler = tratador ;
-  sigemptyset (&action.sa_mask) ;
-  action.sa_flags = 0 ;
-  if (sigaction (SIGALRM, &action, 0) < 0)
-  {
-    perror ("Erro em sigaction: ") ;
-    exit (1) ;
-  }
-
-  // ajusta valores do temporizador
-  timer.it_value.tv_usec = 1000 ;      // primeiro disparo, em micro-segundos
-  timer.it_value.tv_sec  = 0 ;         // primeiro disparo, em segundos
-  timer.it_interval.tv_usec = 1000 ;   // disparos subsequentes, em micro-segundos
-  timer.it_interval.tv_sec  = 0 ;      // disparos subsequentes, em segundos
-
-  // arma o temporizador ITIMER_REAL (vide man setitimer)
-  if (setitimer (ITIMER_REAL, &timer, 0) < 0)
-  {
-    perror ("Erro em setitimer: ") ;
-    exit (1) ;
-  }
+    return priority_task;
 }
 
 void task_setprio (task_t *task, int prio) {
-    int prioridade = prio;
-    // ajusta prioridade para range permitido
-    if (prio < LOWER_BOUND) {
-        prioridade = LOWER_BOUND;
-    } else if (prio > UPPER_BOUND) {
-        prioridade = UPPER_BOUND;
+    // Ajusta o valor da prioridade dentro do range permitido
+    int ranged_priority = MAX(MIN_PRIORITY, MIN(prio, MAX_PRIORITY));
+
+    // Se a task não existir, atualiza a prioridade da task em execução
+    if (task == NULL) {
+        taskExec->static_priority = taskExec->dynamic_priority = ranged_priority;
+        return;
     }
 
-    if (task == NULL) {
-        taskExec->staticPrio = prioridade;
-    }
-    task->staticPrio = prioridade;
-    task->prio = prioridade;
+    task->static_priority = task->dynamic_priority = ranged_priority;
 }
 
 int task_getprio (task_t *task) {
+    // Se a task não existir returna a prioridade estática da task em execução
     if (task == NULL) {
-        return taskExec->staticPrio;
+        return taskExec->static_priority;
     }
-    return task->staticPrio;
+
+    return task->static_priority;
+}
+
+// Função que lida com cada interrupção
+void timer_interrupt_handler(int signum) {
+    systemTime++;
+
+    // Ignora a task main
+    if (taskExec == taskMain) {
+        return;
+    }
+
+    // Ignora a task do dispatcher
+    if (taskExec == taskDisp) {
+        return;
+    }
+
+    // Atualiza o contador de tempo que a tarefa está no processador (Quantum)
+    taskExec->ramining_quanta--;
+
+    // Preempta a tarefa caso ela exceda o tempo máximo no processdor
+    if (taskExec->ramining_quanta <= 0) {
+        task_yield();
+    }
 }
 
 // ****************************************************************************
@@ -108,11 +108,86 @@ int task_getprio (task_t *task) {
 
 
 void before_ppos_init () {
-    timer_handler();
+    // Registro do timer que gera interrupção a cada TIMER_MS_TICK 
+
+    // Registra a handler para o sinal de timer SIGALRM
+    action.sa_handler = timer_interrupt_handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+
+    if (sigaction(SIGALRM, &action, 0) < 0) {
+        perror("Erro em sigaction: ");
+        exit (1);
+    }
+
+    // Primeiro disparo do timer, em micro-segundos
+    timer.it_value.tv_usec = TIMER_MS_TICK;
+
+    // Primeiro disparo do timer, em segundos
+    timer.it_value.tv_sec  = 0;
+
+    // Disparos subsequentes do timer, em micro-segundos
+    timer.it_interval.tv_usec = TIMER_MS_TICK;
+
+    // disparos subsequentes do timer, em segundos
+    timer.it_interval.tv_sec  = 0;
+
+
+    // Arma o temporizador ITIMER_REAL
+    if (setitimer(ITIMER_REAL, &timer, 0) < 0) {
+        perror ("Erro em setitimer: ");
+        exit (1);
+    }
+
 #ifdef DEBUG
     printf("\ninit - BEFORE");
 #endif
 }
+
+void after_task_create (task_t *task ) {
+    // Definição do quantum da tarefa
+    task->ramining_quanta = QUANTUM_VALUE;
+
+    // Definição de algumas propriedades de métrica
+    task->created_at = systemTime;
+    task->activations = 0;
+    
+#ifdef DEBUG
+    printf("\ntask_create - AFTER - [%d]", task->id);
+#endif
+}
+
+void before_task_switch ( task_t *task ) {
+    // Atualização das propriedades de métrica
+    taskExec->processor_time += systemTime - task->last_processor_entry_time;
+    task->last_processor_entry_time = systemTime;
+    task->activations++;
+
+#ifdef DEBUG
+    printf("\ntask_switch - BEFORE - [%d -> %d]", taskExec->id, task->id);
+#endif
+}
+
+void after_task_resume (task_t *task) {
+    // Atualização das propriedades de métrica
+    task->last_processor_entry_time = systemTime;
+    task->activations++;
+
+#ifdef DEBUG
+    printf("\ntask_resume - AFTER - [%d]", task->id);
+#endif
+}
+
+void after_task_exit () {
+    // Contabilização das métricas da tarefa
+    taskExec->execution_time = systemTime - taskExec->created_at;
+    printf("Task %d exit: execution time %d ms, processor time %d ms, %d activations\n", taskExec->id, taskExec->execution_time, taskExec->processor_time, taskExec->activations);
+
+#ifdef DEBUG
+    printf("\ntask_exit - AFTER- [%d]", taskExec->id);
+#endif
+}
+
 
 void after_ppos_init () {
     // put your customization here
@@ -128,38 +203,10 @@ void before_task_create (task_t *task ) {
 #endif
 }
 
-void after_task_create (task_t *task ) {
-    task->ticks = MAX_QUANTUM;
-    task->createdAt = systemTime;
-    task->activations = 0;
-#ifdef DEBUG
-    printf("\ntask_create - AFTER - [%d]", task->id);
-#endif
-}
-
 void before_task_exit () {
     // put your customization here
 #ifdef DEBUG
     printf("\ntask_exit - BEFORE - [%d]", taskExec->id);
-#endif
-}
-
-void after_task_exit () {
-    taskExec->execTime = systemTime - taskExec->createdAt;
-    printf("Task %d exit: execution time %d ms, processor time %d ms, %d activations\n",
-    taskExec->id, taskExec->execTime, taskExec->processorTime, taskExec->activations);
-#ifdef DEBUG
-    printf("\ntask_exit - AFTER- [%d]", taskExec->id);
-#endif
-}
-
-void before_task_switch ( task_t *task ) {
-    taskExec->processorTime += systemTime - task->currentProcessorTime;
-
-    task->currentProcessorTime = systemTime;
-    task->activations++;
-#ifdef DEBUG
-    printf("\ntask_switch - BEFORE - [%d -> %d]", taskExec->id, task->id);
 #endif
 }
 
@@ -176,6 +223,7 @@ void before_task_yield () {
     printf("\ntask_yield - BEFORE - [%d]", taskExec->id);
 #endif
 }
+
 void after_task_yield () {
     // put your customization here
 #ifdef DEBUG
@@ -183,33 +231,24 @@ void after_task_yield () {
 #endif
 }
 
-
-void before_task_suspend( task_t *task ) {
+void before_task_suspend ( task_t *task ) {
     // put your customization here
 #ifdef DEBUG
     printf("\ntask_suspend - BEFORE - [%d]", task->id);
 #endif
 }
 
-void after_task_suspend( task_t *task ) {
+void after_task_suspend ( task_t *task ) {
     // put your customization here
 #ifdef DEBUG
     printf("\ntask_suspend - AFTER - [%d]", task->id);
 #endif
 }
 
-void before_task_resume(task_t *task) {
+void before_task_resume (task_t *task) {
     // put your customization here
 #ifdef DEBUG
     printf("\ntask_resume - BEFORE - [%d]", task->id);
-#endif
-}
-
-void after_task_resume(task_t *task) {
-    task->currentProcessorTime = systemTime;
-    task->activations++;
-#ifdef DEBUG
-    printf("\ntask_resume - AFTER - [%d]", task->id);
 #endif
 }
 
@@ -242,7 +281,6 @@ int after_task_join (task_t *task) {
 #endif
     return 0;
 }
-
 
 int before_sem_create (semaphore_t *s, int value) {
     // put your customization here
