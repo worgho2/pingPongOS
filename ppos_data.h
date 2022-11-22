@@ -27,7 +27,7 @@ typedef struct task_t
    // ... (outros campos deve ser adicionados APOS esse comentario)
 
    // Quanta atual disponível até ser preemptada
-   int ramining_quanta;
+   int remaining_quanta;
    
    // Variáveis de prioridade
    int dynamic_priority;

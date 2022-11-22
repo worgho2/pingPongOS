@@ -96,10 +96,10 @@ void timer_interrupt_handler(int signum) {
     }
 
     // Atualiza o contador de tempo que a tarefa está no processador (Quantum)
-    taskExec->ramining_quanta--;
+    taskExec->remaining_quanta--;
 
     // Preempta a tarefa caso ela exceda o tempo máximo no processdor
-    if (taskExec->ramining_quanta <= 0) {
+    if (taskExec->remaining_quanta <= 0) {
         task_yield();
     }
 }
@@ -149,7 +149,7 @@ void before_ppos_init () {
 
 void after_task_create (task_t *task ) {
     // Definição do quantum da tarefa
-    task->ramining_quanta = QUANTUM_VALUE;
+    task->remaining_quanta = QUANTUM_VALUE;
 
     // Definição de algumas propriedades de métrica
     task->created_at = systemTime;
